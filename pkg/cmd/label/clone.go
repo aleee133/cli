@@ -9,9 +9,9 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/internal/ghrepo"
+	"github.com/cli/cli/v2/internal/text"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
-	"github.com/cli/cli/v2/utils"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 )
@@ -34,7 +34,7 @@ func newCmdClone(f *cmdutil.Factory, runF func(*cloneOptions) error) *cobra.Comm
 	cmd := &cobra.Command{
 		Use:   "clone <source-repository>",
 		Short: "Clones labels from one repository to another",
-		Long: heredoc.Doc(`
+		Long: heredoc.Docf(`
 			Clones labels from a source repository to a destination repository on GitHub.
 			By default, the destination repository is the current repository.
 
@@ -44,8 +44,8 @@ func newCmdClone(f *cmdutil.Factory, runF func(*cloneOptions) error) *cobra.Comm
 
 			Labels from the source repository that already exist in the destination
 			repository will be skipped. You can overwrite existing labels in the
-			destination repository using the --force flag.
-		`),
+			destination repository using the %[1]s--force%[1]s flag.
+		`, "`"),
 		Example: heredoc.Doc(`
 			# clone and overwrite labels from cli/cli repository into the current repository
 			$ gh label clone cli/cli --force
@@ -94,7 +94,7 @@ func cloneRun(opts *cloneOptions) error {
 	if opts.IO.IsStdoutTTY() {
 		cs := opts.IO.ColorScheme()
 		pluralize := func(num int) string {
-			return utils.Pluralize(num, "label")
+			return text.Pluralize(num, "label")
 		}
 
 		successCount := int(successCount)

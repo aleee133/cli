@@ -9,6 +9,78 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestIssueFeatures(t *testing.T) {
+	tests := []struct {
+		name          string
+		hostname      string
+		queryResponse map[string]string
+		wantFeatures  IssueFeatures
+		wantErr       bool
+	}{
+		{
+			name:     "github.com",
+			hostname: "github.com",
+			wantFeatures: IssueFeatures{
+				StateReason: true,
+			},
+			wantErr: false,
+		},
+		{
+			name:     "ghec data residency (ghe.com)",
+			hostname: "stampname.ghe.com",
+			wantFeatures: IssueFeatures{
+				StateReason: true,
+			},
+			wantErr: false,
+		},
+		{
+			name:     "GHE empty response",
+			hostname: "git.my.org",
+			queryResponse: map[string]string{
+				`query Issue_fields\b`: `{"data": {}}`,
+			},
+			wantFeatures: IssueFeatures{
+				StateReason: false,
+			},
+			wantErr: false,
+		},
+		{
+			name:     "GHE has state reason field",
+			hostname: "git.my.org",
+			queryResponse: map[string]string{
+				`query Issue_fields\b`: heredoc.Doc(`
+					{ "data": { "Issue": { "fields": [
+						{"name": "stateReason"}
+					] } } }
+				`),
+			},
+			wantFeatures: IssueFeatures{
+				StateReason: true,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			httpClient := &http.Client{}
+			httpmock.ReplaceTripper(httpClient, reg)
+			for query, resp := range tt.queryResponse {
+				reg.Register(httpmock.GraphQL(query), httpmock.StringResponse(resp))
+			}
+			detector := detector{host: tt.hostname, httpClient: httpClient}
+			gotFeatures, err := detector.IssueFeatures()
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantFeatures, gotFeatures)
+		})
+	}
+}
+
 func TestPullRequestFeatures(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -18,21 +90,43 @@ func TestPullRequestFeatures(t *testing.T) {
 		wantErr       bool
 	}{
 		{
-			name:     "github.com",
+			name:     "github.com with all features",
 			hostname: "github.com",
 			queryResponse: map[string]string{
 				`query PullRequest_fields\b`: heredoc.Doc(`
-					{ "data": { "PullRequest": { "fields": [
-						{"name": "isInMergeQueue"},
-						{"name": "isMergeQueueEnabled"}
-					] } } }
-				`),
+				{
+					"data": {
+						"PullRequest": {
+							"fields": [
+								{"name": "isInMergeQueue"},
+								{"name": "isMergeQueueEnabled"}
+							]
+						},
+						"StatusCheckRollupContextConnection": {
+							"fields": [
+								{"name": "checkRunCount"},
+								{"name": "checkRunCountsByState"},
+								{"name": "statusContextCount"},
+								{"name": "statusContextCountsByState"}
+							]
+						}
+					}
+				}`),
+				`query PullRequest_fields2\b`: heredoc.Doc(`
+				{
+					"data": {
+						"WorkflowRun": {
+							"fields": [
+								{"name": "event"}
+							]
+						}
+					}
+				}`),
 			},
 			wantFeatures: PullRequestFeatures{
-				ReviewDecision:       true,
-				StatusCheckRollup:    true,
-				BranchProtectionRule: true,
-				MergeQueue:           true,
+				MergeQueue:                     true,
+				CheckRunAndStatusContextCounts: true,
+				CheckRunEvent:                  true,
 			},
 			wantErr: false,
 		},
@@ -41,34 +135,108 @@ func TestPullRequestFeatures(t *testing.T) {
 			hostname: "github.com",
 			queryResponse: map[string]string{
 				`query PullRequest_fields\b`: heredoc.Doc(`
-					{ "data": { "PullRequest": { "fields": [
-					] } } }
-				`),
+				{
+					"data": {
+						"PullRequest": {
+							"fields": []
+						},
+						"StatusCheckRollupContextConnection": {
+							"fields": [
+								{"name": "checkRunCount"},
+								{"name": "checkRunCountsByState"},
+								{"name": "statusContextCount"},
+								{"name": "statusContextCountsByState"}
+							]
+						}
+					}
+				}`),
+				`query PullRequest_fields2\b`: heredoc.Doc(`
+				{
+					"data": {
+						"WorkflowRun": {
+							"fields": [
+								{"name": "event"}
+							]
+						}
+					}
+				}`),
 			},
 			wantFeatures: PullRequestFeatures{
-				ReviewDecision:       true,
-				StatusCheckRollup:    true,
-				BranchProtectionRule: true,
-				MergeQueue:           false,
+				MergeQueue:                     false,
+				CheckRunAndStatusContextCounts: true,
+				CheckRunEvent:                  true,
 			},
 			wantErr: false,
 		},
 		{
-			name:     "GHE",
+			name:     "GHE with all features",
 			hostname: "git.my.org",
 			queryResponse: map[string]string{
 				`query PullRequest_fields\b`: heredoc.Doc(`
-					{ "data": { "PullRequest": { "fields": [
-						{"name": "isInMergeQueue"},
-						{"name": "isMergeQueueEnabled"}
-					] } } }
-				`),
+				{
+					"data": {
+						"PullRequest": {
+							"fields": [
+								{"name": "isInMergeQueue"},
+								{"name": "isMergeQueueEnabled"}
+							]
+						},
+						"StatusCheckRollupContextConnection": {
+							"fields": [
+								{"name": "checkRunCount"},
+								{"name": "checkRunCountsByState"},
+								{"name": "statusContextCount"},
+								{"name": "statusContextCountsByState"}
+							]
+						}
+					}
+				}`),
+				`query PullRequest_fields2\b`: heredoc.Doc(`
+				{
+					"data": {
+						"WorkflowRun": {
+							"fields": [
+								{"name": "event"}
+							]
+						}
+					}
+				}`),
 			},
 			wantFeatures: PullRequestFeatures{
-				ReviewDecision:       true,
-				StatusCheckRollup:    true,
-				BranchProtectionRule: true,
-				MergeQueue:           true,
+				MergeQueue:                     true,
+				CheckRunAndStatusContextCounts: true,
+				CheckRunEvent:                  true,
+			},
+			wantErr: false,
+		},
+		{
+			name:     "GHE with no features",
+			hostname: "git.my.org",
+			queryResponse: map[string]string{
+				`query PullRequest_fields\b`: heredoc.Doc(`
+				{
+					"data": {
+						"PullRequest": {
+							"fields": []
+						},
+						"StatusCheckRollupContextConnection": {
+							"fields": []
+						}
+					}
+				}`),
+				`query PullRequest_fields2\b`: heredoc.Doc(`
+				{
+					"data": {
+						"WorkflowRun": {
+							"fields": []
+						}
+					}
+				}`),
+			},
+			wantFeatures: PullRequestFeatures{
+				MergeQueue:                     false,
+				CheckRunAndStatusContextCounts: false,
+				CheckRunEvent:                  false,
 			},
 			wantErr: false,
 		},
@@ -82,13 +250,13 @@ func TestPullRequestFeatures(t *testing.T) {
 				reg.Register(httpmock.GraphQL(query), httpmock.StringResponse(resp))
 			}
 			detector := detector{host: tt.hostname, httpClient: httpClient}
-			gotPrFeatures, err := detector.PullRequestFeatures()
+			gotFeatures, err := detector.PullRequestFeatures()
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, tt.wantFeatures, gotPrFeatures)
+			assert.Equal(t, tt.wantFeatures, gotFeatures)
 		})
 	}
 }
@@ -105,8 +273,16 @@ func TestRepositoryFeatures(t *testing.T) {
 			name:     "github.com",
 			hostname: "github.com",
 			wantFeatures: RepositoryFeatures{
-				IssueTemplateMutation:    true,
-				IssueTemplateQuery:       true,
+				PullRequestTemplateQuery: true,
+				VisibilityField:          true,
+				AutoMerge:                true,
+			},
+			wantErr: false,
+		},
+		{
+			name:     "ghec data residency (ghe.com)",
+			hostname: "stampname.ghe.com",
+			wantFeatures: RepositoryFeatures{
 				PullRequestTemplateQuery: true,
 				VisibilityField:          true,
 				AutoMerge:                true,
@@ -120,8 +296,6 @@ func TestRepositoryFeatures(t *testing.T) {
 				`query Repository_fields\b`: `{"data": {}}`,
 			},
 			wantFeatures: RepositoryFeatures{
-				IssueTemplateMutation:    true,
-				IssueTemplateQuery:       true,
 				PullRequestTemplateQuery: false,
 			},
 			wantErr: false,
@@ -137,8 +311,6 @@ func TestRepositoryFeatures(t *testing.T) {
 				`),
 			},
 			wantFeatures: RepositoryFeatures{
-				IssueTemplateMutation:    true,
-				IssueTemplateQuery:       true,
 				PullRequestTemplateQuery: true,
 			},
 			wantErr: false,
@@ -154,9 +326,7 @@ func TestRepositoryFeatures(t *testing.T) {
 				`),
 			},
 			wantFeatures: RepositoryFeatures{
-				IssueTemplateMutation: true,
-				IssueTemplateQuery:    true,
-				VisibilityField:       true,
+				VisibilityField: true,
 			},
 			wantErr: false,
 		},
@@ -171,9 +341,7 @@ func TestRepositoryFeatures(t *testing.T) {
 				`),
 			},
 			wantFeatures: RepositoryFeatures{
-				IssueTemplateMutation: true,
-				IssueTemplateQuery:    true,
-				AutoMerge:             true,
+				AutoMerge: true,
 			},
 			wantErr: false,
 		},
@@ -188,13 +356,13 @@ func TestRepositoryFeatures(t *testing.T) {
 				reg.Register(httpmock.GraphQL(query), httpmock.StringResponse(resp))
 			}
 			detector := detector{host: tt.hostname, httpClient: httpClient}
-			gotPrFeatures, err := detector.RepositoryFeatures()
+			gotFeatures, err := detector.RepositoryFeatures()
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, tt.wantFeatures, gotPrFeatures)
+			assert.Equal(t, tt.wantFeatures, gotFeatures)
 		})
 	}
 }

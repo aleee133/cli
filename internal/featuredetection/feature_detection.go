@@ -4,7 +4,9 @@ import (
 	"net/http"
 
 	"github.com/cli/cli/v2/api"
-	"github.com/cli/cli/v2/internal/ghinstance"
+	"golang.org/x/sync/errgroup"
+
+	ghauth "github.com/cli/go-gh/v2/pkg/auth"
 )
 
 type Detector interface {
@@ -13,35 +15,36 @@ type Detector interface {
 	RepositoryFeatures() (RepositoryFeatures, error)
 }
 
-type IssueFeatures struct{}
+type IssueFeatures struct {
+	StateReason bool
+}
 
-var allIssueFeatures = IssueFeatures{}
+var allIssueFeatures = IssueFeatures{
+	StateReason: true,
+}
 
 type PullRequestFeatures struct {
-	ReviewDecision       bool
-	StatusCheckRollup    bool
-	BranchProtectionRule bool
-	MergeQueue           bool
+	MergeQueue bool
+	// CheckRunAndStatusContextCounts indicates whether the API supports
+	// the checkRunCount, checkRunCountsByState, statusContextCount and statusContextCountsByState
+	// fields on the StatusCheckRollupContextConnection
+	CheckRunAndStatusContextCounts bool
+	CheckRunEvent                  bool
 }
 
 var allPullRequestFeatures = PullRequestFeatures{
-	ReviewDecision:       true,
-	StatusCheckRollup:    true,
-	BranchProtectionRule: true,
-	MergeQueue:           true,
+	MergeQueue:                     true,
+	CheckRunAndStatusContextCounts: true,
+	CheckRunEvent:                  true,
 }
 
 type RepositoryFeatures struct {
-	IssueTemplateMutation    bool
-	IssueTemplateQuery       bool
 	PullRequestTemplateQuery bool
 	VisibilityField          bool
 	AutoMerge                bool
 }
 
 var allRepositoryFeatures = RepositoryFeatures{
-	IssueTemplateMutation:    true,
-	IssueTemplateQuery:       true,
 	PullRequestTemplateQuery: true,
 	VisibilityField:          true,
 	AutoMerge:                true,
@@ -60,11 +63,35 @@ func NewDetector(httpClient *http.Client, host string) Detector {
 }
 
 func (d *detector) IssueFeatures() (IssueFeatures, error) {
-	if !ghinstance.IsEnterprise(d.host) {
+	if !ghauth.IsEnterprise(d.host) {
 		return allIssueFeatures, nil
 	}
 
-	return allIssueFeatures, nil
+	features := IssueFeatures{
+		StateReason: false,
+	}
+
+	var featureDetection struct {
+		Issue struct {
+			Fields []struct {
+				Name string
+			} `graphql:"fields(includeDeprecated: true)"`
+		} `graphql:"Issue: __type(name: \"Issue\")"`
+	}
+
+	gql := api.NewClientFromHTTP(d.httpClient)
+	err := gql.Query(d.host, "Issue_fields", &featureDetection, nil)
+	if err != nil {
+		return features, err
+	}
+
+	for _, field := range featureDetection.Issue.Fields {
+		if field.Name == "stateReason" {
+			features.StateReason = true
+		}
+	}
+
+	return features, nil
 }
 
 func (d *detector) PullRequestFeatures() (PullRequestFeatures, error) {
@@ -75,29 +102,61 @@ func (d *detector) PullRequestFeatures() (PullRequestFeatures, error) {
 	// 	return allPullRequestFeatures, nil
 	// }
 
-	features := PullRequestFeatures{
-		ReviewDecision:       true,
-		StatusCheckRollup:    true,
-		BranchProtectionRule: true,
-	}
-
-	var featureDetection struct {
+	var pullRequestFeatureDetection struct {
 		PullRequest struct {
 			Fields []struct {
 				Name string
 			} `graphql:"fields(includeDeprecated: true)"`
 		} `graphql:"PullRequest: __type(name: \"PullRequest\")"`
+		StatusCheckRollupContextConnection struct {
+			Fields []struct {
+				Name string
+			} `graphql:"fields(includeDeprecated: true)"`
+		} `graphql:"StatusCheckRollupContextConnection: __type(name: \"StatusCheckRollupContextConnection\")"`
+	}
+
+	// Break feature detection down into two separate queries because the platform
+	// only supports two `__type` expressions in one query.
+	var pullRequestFeatureDetection2 struct {
+		WorkflowRun struct {
+			Fields []struct {
+				Name string
+			} `graphql:"fields(includeDeprecated: true)"`
+		} `graphql:"WorkflowRun: __type(name: \"WorkflowRun\")"`
 	}
 
 	gql := api.NewClientFromHTTP(d.httpClient)
-	err := gql.Query(d.host, "PullRequest_fields", &featureDetection, nil)
-	if err != nil {
-		return features, err
+
+	var wg errgroup.Group
+	wg.Go(func() error {
+		return gql.Query(d.host, "PullRequest_fields", &pullRequestFeatureDetection, nil)
+	})
+	wg.Go(func() error {
+		return gql.Query(d.host, "PullRequest_fields2", &pullRequestFeatureDetection2, nil)
+	})
+	if err := wg.Wait(); err != nil {
+		return PullRequestFeatures{}, err
 	}
 
-	for _, field := range featureDetection.PullRequest.Fields {
+	features := PullRequestFeatures{}
+
+	for _, field := range pullRequestFeatureDetection.PullRequest.Fields {
 		if field.Name == "isInMergeQueue" {
 			features.MergeQueue = true
+		}
+	}
+
+	for _, field := range pullRequestFeatureDetection.StatusCheckRollupContextConnection.Fields {
+		// We only check for checkRunCount here but it, checkRunCountsByState, statusContextCount and statusContextCountsByState
+		// were all introduced in the same version of the API.
+		if field.Name == "checkRunCount" {
+			features.CheckRunAndStatusContextCounts = true
+		}
+	}
+
+	for _, field := range pullRequestFeatureDetection2.WorkflowRun.Fields {
+		if field.Name == "event" {
+			features.CheckRunEvent = true
 		}
 	}
 
@@ -105,14 +164,11 @@ func (d *detector) PullRequestFeatures() (PullRequestFeatures, error) {
 }
 
 func (d *detector) RepositoryFeatures() (RepositoryFeatures, error) {
-	if !ghinstance.IsEnterprise(d.host) {
+	if !ghauth.IsEnterprise(d.host) {
 		return allRepositoryFeatures, nil
 	}
 
-	features := RepositoryFeatures{
-		IssueTemplateQuery:    true,
-		IssueTemplateMutation: true,
-	}
+	features := RepositoryFeatures{}
 
 	var featureDetection struct {
 		Repository struct {

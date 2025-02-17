@@ -10,27 +10,24 @@ import (
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/internal/browser"
-	"github.com/cli/cli/v2/internal/config"
+	fd "github.com/cli/cli/v2/internal/featuredetection"
+	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/ghrepo"
+	"github.com/cli/cli/v2/internal/text"
 	issueShared "github.com/cli/cli/v2/pkg/cmd/issue/shared"
-	"github.com/cli/cli/v2/pkg/cmd/pr/shared"
 	prShared "github.com/cli/cli/v2/pkg/cmd/pr/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
-	"github.com/cli/cli/v2/utils"
 	"github.com/shurcooL/githubv4"
 	"github.com/spf13/cobra"
 )
 
 type ListOptions struct {
 	HttpClient func() (*http.Client, error)
-	Config     func() (config.Config, error)
+	Config     func() (gh.Config, error)
 	IO         *iostreams.IOStreams
 	BaseRepo   func() (ghrepo.Interface, error)
 	Browser    browser.Browser
-
-	WebMode  bool
-	Exporter cmdutil.Exporter
 
 	Assignee     string
 	Labels       []string
@@ -40,8 +37,11 @@ type ListOptions struct {
 	Mention      string
 	Milestone    string
 	Search       string
+	WebMode      bool
+	Exporter     cmdutil.Exporter
 
-	Now func() time.Time
+	Detector fd.Detector
+	Now      func() time.Time
 }
 
 func NewCmdList(f *cmdutil.Factory, runF func(*ListOptions) error) *cobra.Command {
@@ -59,7 +59,7 @@ func NewCmdList(f *cmdutil.Factory, runF func(*ListOptions) error) *cobra.Comman
 		Use:   "list",
 		Short: "List issues in a repository",
 		Long: heredoc.Doc(`
-			List issues in a GitHub repository.
+			List issues in a GitHub repository. By default, this only lists open issues.
 
 			The search query syntax is documented here:
 			<https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests>
@@ -70,6 +70,7 @@ func NewCmdList(f *cmdutil.Factory, runF func(*ListOptions) error) *cobra.Comman
 			$ gh issue list --assignee "@me"
 			$ gh issue list --milestone "The big 1.0"
 			$ gh issue list --search "error no:assignee sort:created-asc"
+			$ gh issue list --state all
 		`),
 		Aliases: []string{"ls"},
 		Args:    cmdutil.NoArgsQuoteReminder,
@@ -132,8 +133,21 @@ func listRun(opts *ListOptions) error {
 	}
 
 	issueState := strings.ToLower(opts.State)
-	if issueState == "open" && shared.QueryHasStateClause(opts.Search) {
+	if issueState == "open" && prShared.QueryHasStateClause(opts.Search) {
 		issueState = ""
+	}
+
+	if opts.Detector == nil {
+		cachedClient := api.NewCachedHTTPClient(httpClient, time.Hour*24)
+		opts.Detector = fd.NewDetector(cachedClient, baseRepo.RepoHost())
+	}
+	features, err := opts.Detector.IssueFeatures()
+	if err != nil {
+		return err
+	}
+	fields := defaultFields
+	if features.StateReason {
+		fields = append(defaultFields, "stateReason")
 	}
 
 	filterOptions := prShared.FilterOptions{
@@ -145,7 +159,7 @@ func listRun(opts *ListOptions) error {
 		Mention:   opts.Mention,
 		Milestone: opts.Milestone,
 		Search:    opts.Search,
-		Fields:    defaultFields,
+		Fields:    fields,
 	}
 
 	isTerminal := opts.IO.IsStdoutTTY()
@@ -158,7 +172,7 @@ func listRun(opts *ListOptions) error {
 		}
 
 		if isTerminal {
-			fmt.Fprintf(opts.IO.ErrOut, "Opening %s in your browser.\n", utils.DisplayURL(openURL))
+			fmt.Fprintf(opts.IO.ErrOut, "Opening %s in your browser.\n", text.DisplayURL(openURL))
 		}
 		return opts.Browser.Browse(openURL)
 	}
@@ -170,6 +184,9 @@ func listRun(opts *ListOptions) error {
 	listResult, err := issueList(httpClient, baseRepo, filterOptions, opts.LimitResults)
 	if err != nil {
 		return err
+	}
+	if len(listResult.Issues) == 0 && opts.Exporter == nil {
+		return prShared.ListNoResults(ghrepo.FullName(baseRepo), "issue", !filterOptions.IsDefault())
 	}
 
 	if err := opts.IO.StartPager(); err == nil {
@@ -184,9 +201,6 @@ func listRun(opts *ListOptions) error {
 
 	if listResult.SearchCapped {
 		fmt.Fprintln(opts.IO.ErrOut, "warning: this query uses the Search API which is capped at 1000 results maximum")
-	}
-	if len(listResult.Issues) == 0 {
-		return prShared.ListNoResults(ghrepo.FullName(baseRepo), "issue", !filterOptions.IsDefault())
 	}
 	if isTerminal {
 		title := prShared.ListHeader(ghrepo.FullName(baseRepo), "issue", len(listResult.Issues), listResult.TotalCount, !filterOptions.IsDefault())
@@ -214,7 +228,7 @@ func issueList(client *http.Client, repo ghrepo.Interface, filters prShared.Filt
 	}
 
 	var err error
-	meReplacer := shared.NewMeReplacer(apiClient, repo.RepoHost())
+	meReplacer := prShared.NewMeReplacer(apiClient, repo.RepoHost())
 	filters.Assignee, err = meReplacer.Replace(filters.Assignee)
 	if err != nil {
 		return nil, err

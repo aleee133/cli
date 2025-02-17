@@ -7,6 +7,7 @@ import (
 
 	"github.com/cli/cli/v2/internal/browser"
 	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/pkg/cmd/factory"
 	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/cli/cli/v2/pkg/search"
@@ -15,7 +16,7 @@ import (
 
 func TestSearcher(t *testing.T) {
 	f := factory.New("1")
-	f.Config = func() (config.Config, error) {
+	f.Config = func() (gh.Config, error) {
 		return config.NewBlankConfig(), nil
 	}
 	_, err := Searcher(f)
@@ -23,7 +24,9 @@ func TestSearcher(t *testing.T) {
 }
 
 func TestSearchIssues(t *testing.T) {
-	query := search.Query{
+	var now = time.Date(2022, 2, 28, 12, 30, 0, 0, time.UTC)
+	var updatedAt = time.Date(2021, 2, 28, 12, 30, 0, 0, time.UTC)
+	var query = search.Query{
 		Keywords: []string{"keyword"},
 		Kind:     "issues",
 		Limit:    30,
@@ -33,8 +36,6 @@ func TestSearchIssues(t *testing.T) {
 			Is:       []string{"public", "locked"},
 		},
 	}
-
-	var updatedAt = time.Date(2021, 2, 28, 12, 30, 0, 0, time.UTC)
 	tests := []struct {
 		errMsg     string
 		name       string
@@ -54,9 +55,9 @@ func TestSearchIssues(t *testing.T) {
 						return search.IssuesResult{
 							IncompleteResults: false,
 							Items: []search.Issue{
-								{RepositoryURL: "github.com/test/cli", Number: 123, State: "open", Title: "something broken", Labels: []search.Label{{Name: "bug"}, {Name: "p1"}}, UpdatedAt: updatedAt},
-								{RepositoryURL: "github.com/what/what", Number: 456, State: "closed", Title: "feature request", Labels: []search.Label{{Name: "enhancement"}}, UpdatedAt: updatedAt},
-								{RepositoryURL: "github.com/blah/test", Number: 789, State: "open", Title: "some title", UpdatedAt: updatedAt},
+								{RepositoryURL: "github.com/test/cli", Number: 123, StateInternal: "open", Title: "something broken", Labels: []search.Label{{Name: "bug"}, {Name: "p1"}}, UpdatedAt: updatedAt},
+								{RepositoryURL: "github.com/what/what", Number: 456, StateInternal: "closed", Title: "feature request", Labels: []search.Label{{Name: "enhancement"}}, UpdatedAt: updatedAt},
+								{RepositoryURL: "github.com/blah/test", Number: 789, StateInternal: "open", Title: "some title", UpdatedAt: updatedAt},
 							},
 							Total: 300,
 						}, nil
@@ -64,7 +65,7 @@ func TestSearchIssues(t *testing.T) {
 				},
 			},
 			tty:        true,
-			wantStdout: "\nShowing 3 of 300 issues\n\ntest/cli   #123  something broken  bug, p1      about 1 year ago\nwhat/what  #456  feature request   enhancement  about 1 year ago\nblah/test  #789  some title                     about 1 year ago\n",
+			wantStdout: "\nShowing 3 of 300 issues\n\nREPO       ID    TITLE             LABELS       UPDATED\ntest/cli   #123  something broken  bug, p1      about 1 year ago\nwhat/what  #456  feature request   enhancement  about 1 year ago\nblah/test  #789  some title                     about 1 year ago\n",
 		},
 		{
 			name: "displays issues and pull requests tty",
@@ -76,8 +77,8 @@ func TestSearchIssues(t *testing.T) {
 						return search.IssuesResult{
 							IncompleteResults: false,
 							Items: []search.Issue{
-								{RepositoryURL: "github.com/test/cli", Number: 123, State: "open", Title: "bug", Labels: []search.Label{{Name: "bug"}, {Name: "p1"}}, UpdatedAt: updatedAt},
-								{RepositoryURL: "github.com/what/what", Number: 456, State: "open", Title: "fix bug", Labels: []search.Label{{Name: "fix"}}, PullRequestLinks: search.PullRequestLinks{URL: "someurl"}, UpdatedAt: updatedAt},
+								{RepositoryURL: "github.com/test/cli", Number: 123, StateInternal: "open", Title: "bug", Labels: []search.Label{{Name: "bug"}, {Name: "p1"}}, UpdatedAt: updatedAt},
+								{RepositoryURL: "github.com/what/what", Number: 456, StateInternal: "open", Title: "fix bug", Labels: []search.Label{{Name: "fix"}}, PullRequest: search.PullRequest{URL: "someurl"}, UpdatedAt: updatedAt},
 							},
 							Total: 300,
 						}, nil
@@ -85,7 +86,7 @@ func TestSearchIssues(t *testing.T) {
 				},
 			},
 			tty:        true,
-			wantStdout: "\nShowing 2 of 300 issues and pull requests\n\nissue  test/cli   #123  bug      bug, p1  about 1 year ago\npr     what/what  #456  fix bug  fix      about 1 year ago\n",
+			wantStdout: "\nShowing 2 of 300 issues and pull requests\n\nKIND   REPO       ID    TITLE    LABELS   UPDATED\nissue  test/cli   #123  bug      bug, p1  about 1 year ago\npr     what/what  #456  fix bug  fix      about 1 year ago\n",
 		},
 		{
 			name: "displays results notty",
@@ -97,16 +98,16 @@ func TestSearchIssues(t *testing.T) {
 						return search.IssuesResult{
 							IncompleteResults: false,
 							Items: []search.Issue{
-								{RepositoryURL: "github.com/test/cli", Number: 123, State: "open", Title: "something broken", Labels: []search.Label{{Name: "bug"}, {Name: "p1"}}, UpdatedAt: updatedAt},
-								{RepositoryURL: "github.com/what/what", Number: 456, State: "closed", Title: "feature request", Labels: []search.Label{{Name: "enhancement"}}, UpdatedAt: updatedAt},
-								{RepositoryURL: "github.com/blah/test", Number: 789, State: "open", Title: "some title", UpdatedAt: updatedAt},
+								{RepositoryURL: "github.com/test/cli", Number: 123, StateInternal: "open", Title: "something broken", Labels: []search.Label{{Name: "bug"}, {Name: "p1"}}, UpdatedAt: updatedAt},
+								{RepositoryURL: "github.com/what/what", Number: 456, StateInternal: "closed", Title: "feature request", Labels: []search.Label{{Name: "enhancement"}}, UpdatedAt: updatedAt},
+								{RepositoryURL: "github.com/blah/test", Number: 789, StateInternal: "open", Title: "some title", UpdatedAt: updatedAt},
 							},
 							Total: 300,
 						}, nil
 					},
 				},
 			},
-			wantStdout: "test/cli\t123\topen\tsomething broken\tbug, p1\t2021-02-28 12:30:00 +0000 UTC\nwhat/what\t456\tclosed\tfeature request\tenhancement\t2021-02-28 12:30:00 +0000 UTC\nblah/test\t789\topen\tsome title\t\t2021-02-28 12:30:00 +0000 UTC\n",
+			wantStdout: "test/cli\t123\topen\tsomething broken\tbug, p1\t2021-02-28T12:30:00Z\nwhat/what\t456\tclosed\tfeature request\tenhancement\t2021-02-28T12:30:00Z\nblah/test\t789\topen\tsome title\t\t2021-02-28T12:30:00Z\n",
 		},
 		{
 			name: "displays issues and pull requests notty",
@@ -118,15 +119,15 @@ func TestSearchIssues(t *testing.T) {
 						return search.IssuesResult{
 							IncompleteResults: false,
 							Items: []search.Issue{
-								{RepositoryURL: "github.com/test/cli", Number: 123, State: "open", Title: "bug", Labels: []search.Label{{Name: "bug"}, {Name: "p1"}}, UpdatedAt: updatedAt},
-								{RepositoryURL: "github.com/what/what", Number: 456, State: "open", Title: "fix bug", Labels: []search.Label{{Name: "fix"}}, PullRequestLinks: search.PullRequestLinks{URL: "someurl"}, UpdatedAt: updatedAt},
+								{RepositoryURL: "github.com/test/cli", Number: 123, StateInternal: "open", Title: "bug", Labels: []search.Label{{Name: "bug"}, {Name: "p1"}}, UpdatedAt: updatedAt},
+								{RepositoryURL: "github.com/what/what", Number: 456, StateInternal: "open", Title: "fix bug", Labels: []search.Label{{Name: "fix"}}, PullRequest: search.PullRequest{URL: "someurl"}, UpdatedAt: updatedAt},
 							},
 							Total: 300,
 						}, nil
 					},
 				},
 			},
-			wantStdout: "issue\ttest/cli\t123\topen\tbug\tbug, p1\t2021-02-28 12:30:00 +0000 UTC\npr\twhat/what\t456\topen\tfix bug\tfix\t2021-02-28 12:30:00 +0000 UTC\n",
+			wantStdout: "issue\ttest/cli\t123\topen\tbug\tbug, p1\t2021-02-28T12:30:00Z\npr\twhat/what\t456\topen\tfix bug\tfix\t2021-02-28T12:30:00Z\n",
 		},
 		{
 			name: "displays no results",
@@ -170,7 +171,7 @@ func TestSearchIssues(t *testing.T) {
 				WebMode: true,
 			},
 			tty:        true,
-			wantStderr: "Opening github.com/search in your browser.\n",
+			wantStderr: "Opening https://github.com/search in your browser.\n",
 		},
 		{
 			name: "opens browser for web mode notty",
@@ -193,6 +194,7 @@ func TestSearchIssues(t *testing.T) {
 		ios.SetStdoutTTY(tt.tty)
 		ios.SetStderrTTY(tt.tty)
 		tt.opts.IO = ios
+		tt.opts.Now = now
 		t.Run(tt.name, func(t *testing.T) {
 			err := SearchIssues(tt.opts)
 			if tt.wantErr {

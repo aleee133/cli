@@ -110,7 +110,7 @@ func TestNewCmdRepos(t *testing.T) {
 						Stars:            "6",
 						Topic:            []string{"topic"},
 						Topics:           "7",
-						User:             "owner",
+						User:             []string{"owner"},
 						Is:               []string{"public"},
 					},
 				},
@@ -149,6 +149,8 @@ func TestNewCmdRepos(t *testing.T) {
 }
 
 func TestReposRun(t *testing.T) {
+	var now = time.Date(2022, 2, 28, 12, 30, 0, 0, time.UTC)
+	var updatedAt = time.Date(2021, 2, 28, 12, 30, 0, 0, time.UTC)
 	var query = search.Query{
 		Keywords: []string{"cli"},
 		Kind:     "repositories",
@@ -158,7 +160,6 @@ func TestReposRun(t *testing.T) {
 			Topic: []string{"golang"},
 		},
 	}
-	var updatedAt = time.Date(2021, 2, 28, 12, 30, 0, 0, time.UTC)
 	tests := []struct {
 		errMsg     string
 		name       string
@@ -187,7 +188,7 @@ func TestReposRun(t *testing.T) {
 				},
 			},
 			tty:        true,
-			wantStdout: "\nShowing 3 of 300 repositories\n\ntest/cli     of course  private, archived  Feb 28, 2021\ntest/cliing  wow        public, fork       Feb 28, 2021\ncli/cli      so much    internal           Feb 28, 2021\n",
+			wantStdout: "\nShowing 3 of 300 repositories\n\nNAME         DESCRIPTION  VISIBILITY         UPDATED\ntest/cli     of course    private, archived  about 1 year ago\ntest/cliing  wow          public, fork       about 1 year ago\ncli/cli      so much      internal           about 1 year ago\n",
 		},
 		{
 			name: "displays results notty",
@@ -248,7 +249,7 @@ func TestReposRun(t *testing.T) {
 				WebMode: true,
 			},
 			tty:        true,
-			wantStderr: "Opening github.com/search in your browser.\n",
+			wantStderr: "Opening https://github.com/search in your browser.\n",
 		},
 		{
 			name: "opens browser for web mode notty",
@@ -270,6 +271,7 @@ func TestReposRun(t *testing.T) {
 		ios.SetStdoutTTY(tt.tty)
 		ios.SetStderrTTY(tt.tty)
 		tt.opts.IO = ios
+		tt.opts.Now = now
 		t.Run(tt.name, func(t *testing.T) {
 			err := reposRun(tt.opts)
 			if tt.wantErr {
